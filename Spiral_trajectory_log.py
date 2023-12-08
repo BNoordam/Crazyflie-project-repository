@@ -31,6 +31,7 @@ and how to send setpoints using the high level commander.
 import sys
 import time
 
+
 import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.log import LogConfig
@@ -41,6 +42,8 @@ from cflib.crazyflie.syncLogger import SyncLogger
 from cflib.utils import uri_helper
 import pandas as pd
 
+import os
+
 # URI to the Crazyflie to connect to
 uri = uri_helper.uri_from_env(default='radio://0/1/2M/E7E7E7E7E7')
 
@@ -48,9 +51,11 @@ uri = uri_helper.uri_from_env(default='radio://0/1/2M/E7E7E7E7E7')
 # See https://github.com/whoenig/uav_trajectories for a tool to generate
 # trajectories
 
+# /home/Bjorn/aideck-gap8-examples/examples/other/wifi-img-streamer/
+
 # Duration,x^0,x^1,x^2,x^3,x^4,x^5,x^6,x^7,y^0,y^1,y^2,y^3,y^4,y^5,y^6,y^7,z^0,z^1,z^2,z^3,z^4,z^5,z^6,z^7,yaw^0,yaw^1,yaw^2,yaw^3,yaw^4,yaw^5,yaw^6,yaw^7
 # Read the CSV file with manual header and delimiter specification
-data = pd.read_csv("yaw02.csv", header=None, delimiter=',', skiprows=1)
+data = pd.read_csv("yaw14.csv", header=None, delimiter=',', skiprows=1)
 
 # Convert the DataFrame to a list of lists
 figure8 = data.values.tolist()
@@ -61,7 +66,7 @@ figure8 = data.values.tolist()
 def wait_for_position_estimator(scf):
     print('Waiting for estimator to find position...')
 
-    log_config = LogConfig(name='Kalman Variance', period_in_ms=500)
+    log_config = LogConfig(name='Kalman Variance', period_in_ms=10)
     log_config.add_variable('kalman.varPX', 'float')
     log_config.add_variable('kalman.varPY', 'float')
     log_config.add_variable('kalman.varPZ', 'float')
@@ -107,8 +112,23 @@ def reset_estimator(cf):
     wait_for_position_estimator(cf)
 
 
+def activate_PID_controller(cf):
+    cf.param.set_value('stabilizer.controller', '1')
+
+def activate_INDI_controller(cf):
+    cf.param.set_value('stabilizer.controller', '3')
+
+def activate_Brescianini_controller(cf):
+    cf.param.set_value('stabilizer.controller', '4')
+
 def activate_mellinger_controller(cf):
     cf.param.set_value('stabilizer.controller', '2')
+
+def activate_robust_tdoa(cf):
+    cf.param.set_value('kalman.robustTdoa', '1')
+
+def deactivate_robust_tdoa(cf):
+    cf.param.set_value('kalman.robustTdoa', '0')
 
 
 def upload_trajectory(cf, trajectory_id, trajectory):
@@ -137,7 +157,7 @@ def upload_trajectory(cf, trajectory_id, trajectory):
 def run_sequence(cf, trajectory_id, duration):
     commander = cf.high_level_commander
 
-    commander.takeoff(0.2, 2.0)
+    commander.takeoff(0.25, 3.0)
     time.sleep(3.0)
     relative = False
     commander.start_trajectory(trajectory_id, 1.0, relative)
@@ -152,8 +172,13 @@ def position_callback(timestamp, data, logconf):
     z = data['kalman.stateZ']
     # print('pos: ({}, {}, {})'.format(x, y, z))
 
-    df=pd.DataFrame({'timestamp': [timestamp], 'Kalman.stateX': [x], 'Kalman.stateY': [y], 'Kalman.stateZ': [z]})
-    df.to_csv('traject_log', index=False, header=True, mode='w')
+    file_path = 'traject14_log_Robust_Mellinger_cf2.csv'
+    file_exists = os.path.exists(file_path)
+
+    # Write headers only if the file doesn't exist
+    with open(file_path, 'a', newline='') as file:
+        df = pd.DataFrame({'timestamp': [timestamp], 'Kalman.stateX': [x], 'Kalman.stateY': [y], 'Kalman.stateZ': [z]})
+        df.to_csv(file, index=False, header=not file_exists, mode='a')
 
 
 def start_position_printing(scf):
@@ -166,18 +191,8 @@ def start_position_printing(scf):
     log_conf.data_received_cb.add_callback(position_callback)
     log_conf.start()
 
-def save_to_csv(self, filename='logged_trajectory.csv'):
-        import csv
-
-        with open(filename, 'w', newline='') as csvfile:
-            fieldnames = ['timestamp', 'log_name', 'kalman.stateX', 'kalman.stateY', 'kalman.stateZ']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-            writer.writeheader()
-            for entry in self.logged_data:
-                writer.writerow(entry)
-
-
+def video_streaming():
+    exec(open("opencv_viewer.py").read())  
 
 if __name__ == '__main__':
     cflib.crtp.init_drivers()
@@ -186,9 +201,23 @@ if __name__ == '__main__':
         cf = scf.cf
         trajectory_id = 1
 
-        # activate_mellinger_controller(cf)
+        # CHOOSE A CONTROLLER
+        activate_mellinger_controller(cf)
+        #activate_INDI_controller(cf)
+        #activate_PID_controller(cf)
+        #activate_Brescianini_controller(cf)
+
+        # USE ROBUST TDOA OR NOT 
+        activate_robust_tdoa(cf)
+        #deactivate_robust_tdoa(cf)
+        
+        
         duration = upload_trajectory(cf, trajectory_id, figure8)
-        print('The sequence is {:.1f} seconds long'.format(duration))
+        print('The sequence is {:.1f} seconds long'.format(duration))        
         reset_estimator(cf)
         start_position_printing(scf)
+        #thread_one = threading.Thread(target=run_sequence(cf, trajectory_id, duration))
+        #thread_two = threading.Thread(target=video_streaming)
+        #thread_one.start()
+        #thread_two.start()
         run_sequence(cf, trajectory_id, duration)
